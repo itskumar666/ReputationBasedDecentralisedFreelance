@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-
+import "./FreelancerNFT.sol";
 contract EscrowWithNFT {
     enum Status { NotStarted, Funded, InProgress, Completed, Cancelled, Disputed }
 
@@ -11,12 +11,14 @@ contract EscrowWithNFT {
         bool released;
     }
 
+
     struct Job {
         address client;
         uint256 freelancerNFTId;
-        address nftContract;
+        address nftContract; //minted NFT contract address(freelancerNFT)
         address arbiter;
         uint256 deadline;
+        uint256 totalAmount;
         Status status;
         Milestone[] milestones;
     }
@@ -70,6 +72,8 @@ contract EscrowWithNFT {
         job.deadline = block.timestamp + _deadline;
         job.status = Status.Funded;
         job.nftContract = _nftContract;
+        job.totalAmount = total;
+
 
         for (uint256 i = 0; i < milestoneAmounts.length; i++) {
             job.milestones.push(Milestone(milestoneAmounts[i], false));
@@ -118,7 +122,7 @@ contract EscrowWithNFT {
         require(job.status == Status.Funded, "Cannot cancel");
 
         job.status = Status.Cancelled;
-        payable(job.client).transfer(address(this).balance);
+       payable(job.client).transfer(job.totalAmount);
         emit JobCancelled(jobId);
     }
 
@@ -131,23 +135,40 @@ contract EscrowWithNFT {
         job.status = Status.Disputed;
         emit DisputeRaised(jobId);
     }
+function resolveDispute(uint256 jobId, address winner) external onlyArbiter(jobId) {
+    Job storage job = jobs[jobId];
+    require(job.status == Status.Disputed, "Not disputed");
 
-    function resolveDispute(uint256 jobId, address winner) external onlyArbiter(jobId) {
-        Job storage job = jobs[jobId];
-        require(job.status == Status.Disputed, "Not disputed");
-
-        payable(winner).transfer(address(this).balance);
-        job.status = Status.Completed;
-        emit DisputeResolved(jobId, winner);
+    uint256 unreleased = 0;
+    for (uint256 i = 0; i < job.milestones.length; i++) {
+        if (!job.milestones[i].released) {
+            unreleased += job.milestones[i].amount;
+            job.milestones[i].released = true; // Mark them released to avoid double-send
+        }
     }
 
-    function refundIfExpired(uint256 jobId) external {
-        Job storage job = jobs[jobId];
-        require(block.timestamp > job.deadline, "Not expired");
-        require(job.status == Status.Funded, "Invalid status");
+    payable(winner).transfer(unreleased);
+    job.status = Status.Completed;
 
-        job.status = Status.Cancelled;
-        payable(job.client).transfer(address(this).balance);
+    emit DisputeResolved(jobId, winner);
+}
+
+function refundIfExpired(uint256 jobId) external {
+    Job storage job = jobs[jobId];
+    require(block.timestamp > job.deadline, "Not expired");
+    require(job.status == Status.Funded, "Invalid status");
+
+    uint256 refundAmount = 0;
+    for (uint256 i = 0; i < job.milestones.length; i++) {
+        if (!job.milestones[i].released) {
+            refundAmount += job.milestones[i].amount;
+            job.milestones[i].released = true; // mark as released
+        }
     }
+
+    job.status = Status.Cancelled;
+    payable(job.client).transfer(refundAmount);
+}
+
     
 }
