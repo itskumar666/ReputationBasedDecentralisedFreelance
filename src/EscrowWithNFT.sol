@@ -4,13 +4,19 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "./FreelancerNFT.sol";
 contract EscrowWithNFT {
-    enum Status { NotStarted, Funded, InProgress, Completed, Cancelled, Disputed }
+    enum Status {
+        NotStarted,
+        Funded,
+        InProgress,
+        Completed,
+        Cancelled,
+        Disputed
+    }
 
     struct Milestone {
         uint256 amount;
         bool released;
     }
-
 
     struct Job {
         address client;
@@ -26,7 +32,12 @@ contract EscrowWithNFT {
     uint256 public jobCounter;
     mapping(uint256 => Job) public jobs;
 
-    event JobCreated(uint256 indexed jobId, address indexed client, uint256 totalAmount, uint256 deadline);
+    event JobCreated(
+        uint256 indexed jobId,
+        address indexed client,
+        uint256 totalAmount,
+        uint256 deadline
+    );
     event JobAccepted(uint256 indexed jobId, uint256 indexed nftId);
     event MilestoneReleased(uint256 indexed jobId, uint256 milestoneIndex);
     event JobCompleted(uint256 indexed jobId);
@@ -42,7 +53,10 @@ contract EscrowWithNFT {
     modifier onlyFreelancer(uint256 jobId) {
         Job storage job = jobs[jobId];
         IERC721 nft = IERC721(job.nftContract);
-        require(nft.ownerOf(job.freelancerNFTId) == msg.sender, "Not the NFT owner");
+        require(
+            nft.ownerOf(job.freelancerNFTId) == msg.sender,
+            "Not the NFT owner"
+        );
         _;
     }
 
@@ -74,13 +88,24 @@ contract EscrowWithNFT {
         job.nftContract = _nftContract;
         job.totalAmount = total;
 
-
         for (uint256 i = 0; i < milestoneAmounts.length; i++) {
             job.milestones.push(Milestone(milestoneAmounts[i], false));
         }
 
         emit JobCreated(jobCounter, msg.sender, msg.value, job.deadline);
         return jobCounter++;
+    }
+
+    function getMilestone(
+        uint256 jobId,
+        uint256 index
+    ) external view returns (uint256 amount, bool released) {
+        Milestone storage m = jobs[jobId].milestones[index];
+        return (m.amount, m.released);
+    }
+
+    function getMilestoneCount(uint256 jobId) external view returns (uint256) {
+        return jobs[jobId].milestones.length;
     }
 
     function acceptJob(uint256 jobId, uint256 nftId) external {
@@ -97,14 +122,19 @@ contract EscrowWithNFT {
         emit JobAccepted(jobId, nftId);
     }
 
-    function releaseMilestone(uint256 jobId, uint256 index) external onlyClient(jobId) {
+    function releaseMilestone(
+        uint256 jobId,
+        uint256 index
+    ) external onlyClient(jobId) {
         Job storage job = jobs[jobId];
         require(index < job.milestones.length, "Invalid milestone");
         Milestone storage ms = job.milestones[index];
         require(!ms.released, "Already released");
 
         ms.released = true;
-        address payable freelancer = payable(IERC721(job.nftContract).ownerOf(job.freelancerNFTId));
+        address payable freelancer = payable(
+            IERC721(job.nftContract).ownerOf(job.freelancerNFTId)
+        );
         freelancer.transfer(ms.amount);
 
         emit MilestoneReleased(jobId, index);
@@ -122,53 +152,57 @@ contract EscrowWithNFT {
         require(job.status == Status.Funded, "Cannot cancel");
 
         job.status = Status.Cancelled;
-       payable(job.client).transfer(job.totalAmount);
+        payable(job.client).transfer(job.totalAmount);
         emit JobCancelled(jobId);
     }
 
     function raiseDispute(uint256 jobId) external {
         Job storage job = jobs[jobId];
         require(
-            msg.sender == job.client || msg.sender == IERC721(job.nftContract).ownerOf(job.freelancerNFTId),
+            msg.sender == job.client ||
+                msg.sender ==
+                IERC721(job.nftContract).ownerOf(job.freelancerNFTId),
             "Unauthorized"
         );
         job.status = Status.Disputed;
         emit DisputeRaised(jobId);
     }
-function resolveDispute(uint256 jobId, address winner) external onlyArbiter(jobId) {
-    Job storage job = jobs[jobId];
-    require(job.status == Status.Disputed, "Not disputed");
+    function resolveDispute(
+        uint256 jobId,
+        address winner
+    ) external onlyArbiter(jobId) {
+        Job storage job = jobs[jobId];
+        require(job.status == Status.Disputed, "Not disputed");
 
-    uint256 unreleased = 0;
-    for (uint256 i = 0; i < job.milestones.length; i++) {
-        if (!job.milestones[i].released) {
-            unreleased += job.milestones[i].amount;
-            job.milestones[i].released = true; // Mark them released to avoid double-send
+        uint256 unreleased = 0;
+        for (uint256 i = 0; i < job.milestones.length; i++) {
+            if (!job.milestones[i].released) {
+                unreleased += job.milestones[i].amount;
+                job.milestones[i].released = true; // Mark them released to avoid double-send
+            }
         }
+
+        payable(winner).transfer(unreleased);
+        job.status = Status.Completed;
+
+        emit DisputeResolved(jobId, winner);
     }
 
-    payable(winner).transfer(unreleased);
-    job.status = Status.Completed;
+    function refundIfExpired(uint256 jobId) external {
+        Job storage job = jobs[jobId];
+        require(block.timestamp > job.deadline, "Not expired");
+        require(job.status == Status.Funded, "Invalid status");
 
-    emit DisputeResolved(jobId, winner);
-}
-
-function refundIfExpired(uint256 jobId) external {
-    Job storage job = jobs[jobId];
-    require(block.timestamp > job.deadline, "Not expired");
-    require(job.status == Status.Funded, "Invalid status");
-
-    uint256 refundAmount = 0;
-    for (uint256 i = 0; i < job.milestones.length; i++) {
-        if (!job.milestones[i].released) {
-            refundAmount += job.milestones[i].amount;
-            job.milestones[i].released = true; // mark as released
+        uint256 refundAmount = 0;
+        for (uint256 i = 0; i < job.milestones.length; i++) {
+            if (!job.milestones[i].released) {
+                refundAmount += job.milestones[i].amount;
+                job.milestones[i].released = true; // mark as released
+            }
         }
+
+        job.status = Status.Cancelled;
+        payable(job.client).transfer(refundAmount);
     }
-
-    job.status = Status.Cancelled;
-    payable(job.client).transfer(refundAmount);
-}
-
     
 }

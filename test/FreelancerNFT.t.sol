@@ -92,9 +92,5 @@ contract FreelancerNFTTest is StdCheats,Test{
 }
 
 
-
-
-
-
 }
 
