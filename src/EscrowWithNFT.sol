@@ -28,6 +28,20 @@ contract EscrowWithNFT {
         Status status;
         Milestone[] milestones;
     }
+    struct Vote {
+        address voter;
+        bool voteForFreelancer;
+        uint256 jobId;
+        uint256 stake;
+    }
+    struct Dispute {
+        bool isOpen;
+        uint256 freelancerVoteCount;
+        uint256 companyVoteCount;
+        uint256 endTime;
+        mapping(address => Vote) votes;
+    }
+    mapping(uint256 => Dispute) public disputes;
 
     uint256 public jobCounter;
     mapping(uint256 => Job) public jobs;
@@ -167,6 +181,13 @@ contract EscrowWithNFT {
         job.status = Status.Disputed;
         emit DisputeRaised(jobId);
     }
+    function voteOnDispute(uint256 jobId, bool voteForFreelancer) public {
+        Job storage job = jobs[jobId];
+        require(job.status == Status.Disputed, "Not disputed");
+        Dispute storage dispute = disputes[jobId];
+        require(dispute.isOpen, "Vote is closed");
+        require(dispute.votes[msg.sender].stake == 0, "Already voted"); // assuming stake > 0 means voted
+    }
     function resolveDispute(
         uint256 jobId,
         address winner
@@ -178,7 +199,7 @@ contract EscrowWithNFT {
         for (uint256 i = 0; i < job.milestones.length; i++) {
             if (!job.milestones[i].released) {
                 unreleased += job.milestones[i].amount;
-                job.milestones[i].released = true; // Mark them released to avoid double-send
+                job.milestones[i].released = true;
             }
         }
 
@@ -204,5 +225,4 @@ contract EscrowWithNFT {
         job.status = Status.Cancelled;
         payable(job.client).transfer(refundAmount);
     }
-    
 }

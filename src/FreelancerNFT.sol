@@ -95,4 +95,5 @@ contract FreelancerNFT is ERC721URIStorage, Ownable {
         _burn(tokenId);
         delete users[tokenId];
     }
+    
 }
